@@ -1,0 +1,247 @@
+----Kafka Producers (Data Bricks Spark cluster)----------------------------
+import java.util.Properties
+import org.apache.kafka.clients.producer.Producer
+import org.apache.kafka.clients.producer.KafkaProducer
+import org.apache.kafka.clients.producer.ProducerRecrod
+
+val kafkabrokrs =""
+
+val topic=""
+
+val props = new Properties()
+props.put("bootstrap.servers",kafkaBrokers)
+props.put("acks","all")
+props.put("key.serializer","org.apache.kafka.commom.serialization.StringSerializer")
+props.put("value.serializer","org.apache.kafka.commom.serialization.StringSerializer"
+
+
+
+val producer = new KafkaProducer[String,String](props)
+
+
+def sendEvent(msg:String)={
+val key=java.util.UUID.randomUUID().toString()
+producer.send(new ProducerRecord[String,String](topic,key,msg))
+System.out.println("Sen Even wih key" + key + "and msg is:" + msg)
+}
+
+
+//Twiter Configuration ...
+import java.util._
+import scala.collection.JavaConverters.-
+import twitter4j.-
+import twitter4j.TwitterFactory
+import twitter4j.Twiter
+import twiter4j.conf.ConfigurationBuilder
+val cvb = new ConfigurationBuilder()
+   cvb.setDebugEnabled(true)
+      .setOAuthConsumerKey(twitterConsumerKey)
+      .setOAuthConsumerSecret(twitterConsumerSecre)
+      .seOAuthAccessToken(twitterOauthAccessTiken)
+      .setOAuthAccessTokenSecret(twiterOauthTokenSecre)
+
+val twitterFacory = new twitterFactory(cvb.build())
+val twitter = twitterFacory.getInstance()
+val query = new Query(" #bike ")
+query.setCount(100)
+query.lang("en")
+var finished = false
+while (!finished) {
+  val result = twitter.search(query)
+  val statuses = result.getTweets()
+  var owestStatusId= Long.MaxValue
+  for(status <- statuses.asScala) {
+   if(!status.isRetweet()){
+     sendEven(status.getText())
+     Thread.sleep(2000) 
+        }
+
+   lowerstStatusId = Math.mn(status.getId(), lowestStatusId)
+  }
+
+ query.setMaxId(lowestStatusId - 1 )
+ }
+
+--------------Kafka Consumer----To read streamind Data------------------------------------------------------
+ val kafkaBrokers = ""
+
+import org.apache.spark.sql.functions.{explode,split}
+
+val kafka =spark.readSream
+           .format("kafka")
+           .option("kafka.bootstrap.servers", kafkaBrokers)
+           .option("subscribe", "topic_name")
+           .option("startingOffsets","latest")
+           .option("maxOffsetsPerTrigger",100)
+           .load()
+
+ kafka.writeStream.outputMode("append").format("console").option("truncate",false).start().awaitTermination()
+
+
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+
+ val Data = kafka.
+            .withColumn("key",$"key".cast(StringType))
+            .withColumn("Topic",$"topic".cast(StringType))
+            .withColumn("Offset",$"offset".cast(LongType))
+	    .withColumn("Partition",$"partition".cast(IntegerType))
+	    .withColumn("Timestamp",$"timestamp".cast(TimestampType))           
+            .withColumn("Value",$"vaue".cast(StringType))
+            .select("key","Value","Partition","Offset","Timestamp")
+
+ Data.writeStream.outputMode("append").forma("console").option("truncate",false).start().awaitTermination()		
+
+ val streamingdata=Data.selectExpr("cast (value as String) AS content")
+
+----------------------------Azure Storage Read-------------
+val sourcepath = "abfss://container@gen2.blob.core.windows.net"
+val df=spark.read.format("csv").option("path",sourcepath).option("inferSchema","false").option("header","false").load()
+
+val header = df.first()
+val data=df.filter(x=> x!=header)
+
+
+------------------------Convert the dataframe data based on types  -----------
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+import spark.implicits._
+
+val combineDateAndTime = udf((date:String, time:String) => { data + " " +time })
+
+val typedData = data.withColumn("status",col("_c0").cast(IntegerType))
+ .withColumn("payment",col("_c1").cast(StringType)) 
+ .withcolumn("Lat",col("_c2").cast(DoubleType))
+ .withColumn("StartDate",to_date(col("_c5"),'MM/dd/yyyy"))
+ .withColumn("StartTime", unix_timesamp(combineDateAndTime(col("_c5"),col("_c6")),"MM/dd/yyyy HH:mm:).cast(TimestampType))
+ .withColumn("Distance",col("_12").cast(StringType))
+ .select("status","payment","Lat","StartTime","StartDate")
+
+
+----------------------------------COnverting to Json (Custom Producer) to send to Topic-----------------------
+import scala.collection.mutable.ListBuffer
+
+object JsonConverter extends Serializable {
+ def toJson(o:Any) : String = {
+ var json= new ListBuffer[String]()
+  o match {
+   case m: Map[_,_] => {
+     for { (k,v) <-m ) {
+            var key = escape(k.asInstanceOf[String])
+            v match {
+              case a: Map[_,_] => json += "\"" + key + "\":" + toJson(a)
+              case a: List[_] => json += "\"" + key + "\":" + toJson(a)
+              case a: Int => json += "\"" + key + "\":" + a 
+              case a: Boolean => json += "\"" + key + "\":" + a
+              case a: String => json += "\"" + key + "\":\"" + escape(a) + "\""
+              case _ =>;
+             }
+            }
+           }
+       case m: List[_] =>  {
+            var list = new ListBuffer[String]()
+              for (el <-m ) {
+                   el match {
+                    case a: Map[_,_] => list += toJson(a)
+                    case a: List[_] => list += toJson(a)
+                    case a: Int => list += a.toString()
+                    case a: Boolean => list += a.toString()
+                    case a: String => list += "\"" + escape(a) + "\""
+                    case _ => ;
+                  }
+                }
+            return "[" + list.mkString(",") + "]"
+          }
+         case _ => ;
+        }
+       return  "{" + json.mkString(",") + "}"
+      }
+   private def escape(s:String) : String = {
+     reurn s.replaceAll("\"", "\\\\\"");
+   }
+  }
+
+-----------------------------
+val jsonData = typeData.map(row => JsonConverter.toJson(row.getValuesMap(row.schema.fieldNames).map(x=> if (x._2 == null) {(x._1, "null")} 
+else {(x._1,x._2.toString())} )))
+
+ display(jsonData)
+
+-------------------sending data to kafka producer=----------------
+ object KafkaSender extends Serializable {
+    val topicName = "bike" 
+  val props = new Properties()
+   props.put("bootstrap.servers", kafkaBrokers)
+   props.put("acks","all")
+   props.put("key.serializer", "org.apache.kafka.commom.serialization.StringSerializer")
+   props.put("value.serializer", "org.apache.kafka.commom.serialization.StringSerializer")
+
+  val producer = new KafkaProducer[String,String](props)
+    def sendEvent(msg: String) = {
+     val key = java.util.UUID.randomUUID().toString()
+     producer.send(new ProducerRecord[String,String](topicName, key,msg))
+     }
+    }
+
+ jsonData.rdd.foreach(jsonRow => { KafkaSender.sendEvent(jsonRow) })
+
+    
+ 
+---------------------Kafka Consumer-------------------------------------------
+import org.apache.spark.sql.functions.{explode,split}
+
+val kafka =spark.readSream
+           .format("kafka")
+           .option("kafka.bootstrap.servers", kafkaBrokers)
+           .option("subscribe", "topic_name")
+           .option("startingOffsets","latest")
+           .option("maxOffsetsPerTrigger",100)
+           .load()
+
+ kafka.writeStream.outputMode("append").format("console").option("truncate",false).start().awaitTermination()
+
+
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+
+ val KafkaData = kafka.
+            .withColumn("key",$"key".cast(StringType))
+            .withColumn("Topic",$"topic".cast(StringType))
+            .withColumn("Offset",$"offset".cast(LongType))
+	    .withColumn("Partition",$"partition".cast(IntegerType))
+	    .withColumn("Timestamp",$"timestamp".cast(TimestampType))           
+            .withColumn("Value",$"vaue".cast(StringType))
+            .select("key","Value","Partition","Offset","Timestamp")
+
+ KafkaData.writeStream.outputMode("append").forma("console").option("truncate",false).start().awaitTermination()	
+
+ val rawData =KafkaData.selectExpr("CAST(Value as STRING)")
+ 
+ val schema = StructType(
+              StructField("RouteId",StringType) ::
+              StructField("Payment", StringType)::
+              StructField("StartHub",StringType)::
+              StructField("StartLong",StringType)::
+              StructField("EndDate",StringType) ::
+              StructField("EndTime",StringType) ::
+              StructField("MultipleRental",StringType) :: Nil)
+
+ val bikeData = rawData.select(from_json(col("Value"),schema).alias("BikeData"))
+                .select("BikeData.*")
+                .withCoumn("RouteId",$"RouteID".cast(IntegerType))
+                .withColumn("BikeId",$"BikeId".cast(IntegerType))
+
+  bikeData.printSchema  //converted the Json data into required Types.
+
+  display(bikeData)  //Show table and is contstantly being updated..
+
+  //aggregating as below.
+ val startHubs = bikeDAta.groupBy("StartHub").agg(count("StartHub")).sort(desc("count("StartHub")"))
+
+  startHubs.writeStream.outputMode("complete").format("console").option("numRows",10).option("truncate",false),start().awaitTermination()
+
+
+ 
+
+                 
+
